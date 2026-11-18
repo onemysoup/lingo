@@ -38,6 +38,7 @@ context.fetch=async(url,options)=>{request={url,options};return {ok:true,json:as
 run("config.mode='api';config.base='https://example.test/v1';apiKey='private-chat-key';startPractice(topics[2])");
 await run("sendMessage('I think we should interview a few users first.')");
 assert.equal(run('session.messages.at(-1).role'),'assistant');
+assert.equal(elements.get('#feedback').children.at(-1).textContent,'这轮没有新的表达建议。');
 assert.match(JSON.parse(request.options.body).messages[0].content,/Do not turn this into a job interview/);
 assert.equal(JSON.parse(request.options.body).temperature,.4);
 run('finishSession()');

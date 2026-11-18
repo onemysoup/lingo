@@ -89,7 +89,27 @@ function parseResponse(raw){
 }
 
 function setBusy(value){busy=value;$('#send-button').disabled=value;$('#mic-button').disabled=value;$('#chat-input').disabled=value;$('#show-hint').disabled=value}
-function showFeedback(data,isDemo){const host=$('#feedback');host.innerHTML='';if(data.natural){const card=document.createElement('div');card.className='feedback-card';card.innerHTML=`<div class="feedback-label">${isDemo?'本场景的表达示例':'更自然的说法'}</div><blockquote>${esc(data.natural)}</blockquote><p>${esc(data.explanation)}</p><button id="save-feedback">${icon('save')} 收藏表达</button>`;host.append(card);$('#save-feedback').onclick=()=>savePhrase({text:data.natural,explanation:data.explanation,source:session.topic.title})}const note=document.createElement('p');note.className='feedback-note';note.textContent=isDemo?'体验提示：以上为预设表达示例，接入 API 后会针对你的实际回复给出建议。':data.feedback;host.append(note)}
+function showFeedback(data, isDemo) {
+  const host = $('#feedback');
+  const natural = data.natural?.trim();
+  host.innerHTML = '';
+
+  if (natural) {
+    const card = document.createElement('div');
+    card.className = 'feedback-card';
+    card.innerHTML = `<div class="feedback-label">${isDemo ? '本场景的表达示例' : '更自然的说法'}</div><blockquote>${esc(natural)}</blockquote><p>${esc(data.explanation)}</p><button id="save-feedback">${icon('save')} 收藏表达</button>`;
+    host.append(card);
+    $('#save-feedback').onclick = () => savePhrase({text: natural, explanation: data.explanation, source: session.topic.title});
+  }
+
+  const text = isDemo ? '体验提示：以上为预设表达示例，接入 API 后会针对你的实际回复给出建议。' : data.feedback?.trim();
+  if (text || !natural) {
+    const note = document.createElement('p');
+    note.className = 'feedback-note';
+    note.textContent = text || '这轮没有新的表达建议。';
+    host.append(note);
+  }
+}
 async function fetchOpening(){const active=session;controller=new AbortController();setBusy(true);$('#chat-status').textContent='正在准备你的专属场景…';try{const raw=await completion(config,apiKey,[{role:'system',content:systemPrompt(active.topic)},{role:'user',content:'Start the roleplay now. Greet me in character. Keep feedback and natural empty.'}],controller.signal);if(session!==active)return;const data=parseResponse(raw);active.messages.push({role:'assistant',content:data.reply});addMessage('assistant',data.reply);$('#chat-status').textContent='';if(config.autoplay)speak(data.reply)}catch(e){if(session===active){$('#chat-status').textContent=e.message;const fallback="Hi! Let's practice this situation together. How would you like to start?";active.messages.push({role:'assistant',content:fallback});addMessage('assistant',fallback)}}finally{if(session===active){setBusy(false);$('#chat-input').focus()}}}
 async function sendMessage(text){if(!session||busy||!text.trim())return;const active=session;text=text.trim();active.messages.push({role:'user',content:text});active.turns++;addMessage('user',text);$('#chat-input').value='';setBusy(true);$('#chat-status').textContent=active.mode==='api'?`${LingoScenarios[active.topic.id]?.partner||'Alex'} 正在思考…`:'示例伙伴正在回复…';try{let data;if(active.mode==='api'){controller=new AbortController();const raw=await completion(config,apiKey,[{role:'system',content:systemPrompt(active.topic)},...active.messages],controller.signal);if(session!==active)return;data=parseResponse(raw)}else{await new Promise(r=>setTimeout(r,550));if(session!==active)return;const t=active.topic;data={reply:(t.turns||["That makes sense. What would you like to do next?","That's interesting! How would you describe that in your own words?","What would you like to ask me about this situation?"])[(active.turns-1)%(t.turns?.length||3)],natural:t.natural||"I'd love to hear more about that.",explanation:t.explanation||'“I\'d love to hear more” 能自然表达对别人话题的兴趣。'}}active.messages.push({role:'assistant',content:data.reply});addMessage('assistant',data.reply);showFeedback(data,active.mode==='demo');$('#chat-status').textContent='';if(config.autoplay)speak(data.reply)}catch(e){if(session!==active)return;$('#chat-status').textContent=e.message+' 你可以重试这条回复。';const retry=document.createElement('button');retry.className='text-button';retry.textContent='重试上一条';retry.onclick=()=>{retry.remove();const pending=active.messages.at(-1);if(pending?.role==='user'){active.messages.pop();active.turns--;$('#messages').lastElementChild?.remove();sendMessage(pending.content)}};$('#chat-status').append(retry)}finally{if(session===active){setBusy(false);$('#chat-input').focus()}}}
 function finishSession(){if(!session){$('#practice').close();return}controller?.abort();recognition?.abort();recognition=null;speechPlayer.cancel();const s=session;session=null;setBusy(false);$('#mic-button').classList.remove('listening');$('#practice').close();if(s.turns){records.push({id:s.id,topic:s.topic.id,title:s.topic.title,context:s.topic.context,custom:!!s.topic.custom,day:localDay(),seconds:Math.max(1,Math.round((Date.now()-s.started)/1000)),turns:s.turns,words:s.messages.filter(m=>m.role==='user').reduce((n,m)=>n+(m.content.match(/\b[A-Za-z]+(?:'[A-Za-z]+)?\b/g)||[]).length,0),mode:s.mode});persist('lingo-records',records);toast('练习已完成。每一次开口，都会留下进步。')}render()}
