@@ -1,0 +1,52 @@
+const fs=require('node:fs'), vm=require('node:vm'), assert=require('node:assert/strict');
+const elements=new Map(), storage=new Map();
+function element(){return {innerHTML:'',textContent:'',value:'',disabled:false,open:false,children:[],scrollTop:0,scrollHeight:50,classList:{add(){},remove(){},toggle(){}},addEventListener(){},append(x){this.children.push(x)},showModal(){this.open=true},close(){this.open=false},focus(){},remove(){}}}
+const document={querySelector(selector){if(!elements.has(selector))elements.set(selector,element());return elements.get(selector)},querySelectorAll(){return []},addEventListener(){},createElement:element};
+const context=vm.createContext({document,window:{scrollTo(){},addEventListener(){}},localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)},crypto:require('node:crypto').webcrypto,setTimeout,clearTimeout,AbortController,URL,console,fetch:async()=>{throw Error('unexpected fetch')}});
+const path=require('node:path');
+const project=path.resolve(__dirname,'..');
+for(const file of ['scenarios.js','speech.js','app.js']) vm.runInContext(fs.readFileSync(path.join(project,'dist',file),'utf8'),context);
+const run=s=>vm.runInContext(s,context);
+(async()=>{
+assert.equal((elements.get('#topics-grid').innerHTML.match(/class="topic-card"/g)||[]).length,6);
+run("category='旅行出行';renderCards()");assert.equal((elements.get('#topics-grid').innerHTML.match(/class="topic-card"/g)||[]).length,1);
+run("category='全部话题';query='coffee';renderCards()");assert.match(elements.get('#topics-grid').innerHTML,/来杯咖啡/);
+run("query='no-such-topic';renderCards()");assert.match(elements.get('#topics-grid').innerHTML,/还没找到/);
+assert.equal(run("parseResponse('```json\\n{\"reply\":\"Hello!\",\"natural\":\"Could I get a coffee?\"}\\n```').reply"),'Hello!');
+assert.equal(run("parseResponse('Plain answer').reply"),'Plain answer');
+assert.throws(()=>run("validateApi({base:'http://unsafe.example/v1',model:'x'},'key')"),/HTTPS/);
+run("savePhrase(dailyPhrase);savePhrase(dailyPhrase)");assert.equal(run('phrases.length'),1);
+run("startPractice(topics[0])");assert.equal(elements.get('#practice').open,true);
+await run("sendMessage('Could I get a coffee, please?')");assert.equal(run('session.turns'),1);assert.equal(run('session.messages.length'),3);assert.match(elements.get('#feedback').children[0].innerHTML,/Could I get an oat latte/);
+run('session.started-=65000;finishSession()');assert.equal(run('records.length'),1);assert.equal(run('records[0].turns'),1);assert.ok(run('records[0].seconds')>=65);assert.equal(run('records[0].words'),6);assert.equal(elements.get('#practice').open,false);
+run("page='history';render()");assert.match(elements.get('#main').innerHTML,/来杯咖啡/);run("page='progress';render()");assert.match(elements.get('#main').innerHTML,/最近 7 天/);
+let request;context.fetch=async(url,options)=>{request={url,options};return {ok:true,json:async()=>({choices:[{message:{content:'Connected.'}}]})}};
+assert.equal(await run("completion({base:'https://example.test/v1',model:'demo-model'},'demo-key',[{role:'user',content:'Hello'}])"),'Connected.');
+assert.equal(request.url,'https://example.test/v1/chat/completions');assert.equal(request.options.headers.Authorization,'Bearer demo-key');assert.equal(JSON.parse(request.options.body).model,'demo-model');
+context.fetch=async()=>({ok:false,status:401});await assert.rejects(run("completion({base:'https://example.test/v1',model:'test'},'key',[])"),/HTTP 401/);
+assert.ok(!storage.get('lingo-config')?.includes('demo-key'));
+for(const name of ['coffee','travel','work','friends','ideas','food'])assert.ok(fs.statSync(path.join(project,'dist/images',name+'.svg')).size>1000);
+for(let i=0;i<6;i++){
+ const prompt=run(`systemPrompt(topics[${i}])`),policy=run(`LingoScenarios[topics[${i}].id]`);
+ assert.ok(prompt.includes(policy.role));assert.ok(prompt.includes(policy.goal));assert.ok(prompt.includes(policy.ending));
+ assert.match(prompt,/no more than ONE brief question/);assert.match(prompt,/not an endlessly curious interviewer/);
+}
+assert.throws(()=>run("parseResponse(JSON.stringify({reply:'word '.repeat(80)}))"),/短对话限制/);
+assert.throws(()=>run("parseResponse(JSON.stringify({reply:'What is your job? Where do you live?'}))"),/短对话限制/);
+assert.throws(()=>run("parseResponse(JSON.stringify({reply:'你好，今天好吗？'}))"),/情景对话格式/);
+context.fetch=async(url,options)=>{request={url,options};return {ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({reply:'That sounds doable. Shall we start with a small user survey?',natural:'',explanation:'',feedback:''})}}]})}};
+run("config.mode='api';config.base='https://example.test/v1';apiKey='private-chat-key';startPractice(topics[2])");
+await run("sendMessage('I think we should interview a few users first.')");
+assert.equal(run('session.messages.at(-1).role'),'assistant');
+assert.match(JSON.parse(request.options.body).messages[0].content,/Do not turn this into a job interview/);
+assert.equal(JSON.parse(request.options.body).temperature,.4);
+run('finishSession()');
+const fields={mode:'demo',level:'B1',goal:'10',base:'https://chat.example/v1',model:'agnes-3.0-flash',key:'secret-chat-key',speechSource:'edge',browserVoice:'',speechBase:'http://localhost:8765/v1',speechModel:'',speechVoice:'en-US-AriaNeural',speechSpeed:'0.95',speechKey:'',autoplay:''};
+const f=elements.get('#settings-form');f.elements=Object.fromEntries(Object.entries(fields).map(([name,value])=>[name,{value,checked:name==='autoplay',type:name==='autoplay'?'checkbox':'text'}]));
+f.onsubmit({preventDefault(){},target:f});
+assert.equal(run('config.speechSource'),'edge');assert.equal(run('config.speechVoice'),'en-US-AriaNeural');
+assert.equal(run('apiKey'),'secret-chat-key');
+assert.ok(!storage.get('lingo-config').includes('secret-chat-key'));
+run('showSettings()');assert.equal(f.elements.key.value,'secret-chat-key');
+console.log('PASS: 6 topics, category and search, structured replies, URL validation, saved phrases, demo practice, session history, progress, OpenAI request contract, API error handling, bundled assets.');
+})().catch(e=>{console.error(e);process.exitCode=1});
